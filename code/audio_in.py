@@ -10,15 +10,15 @@ logger = logging.getLogger(__name__)
 
 class AudioInputProcessor:
     """
-    Manages audio input, processes it for transcription, and handles related callbacks.
+    管理音频输入，处理转录，并处理相关回调。
 
-    This class receives raw audio chunks, resamples them to the required format (16kHz),
-    feeds them to an underlying `TranscriptionProcessor`, and manages callbacks for
-    real-time transcription updates, recording start events, and silence detection.
-    It also runs the transcription process in a background task.
+    该类接收原始音频块，将其重采样为所需格式（16kHz），
+    将其提供给底层的 `TranscriptionProcessor`，并管理用于
+    实时转录更新、录音开始事件和静音检测的回调。
+    它还在后台任务中运行转录过程。
     """
 
-    _RESAMPLE_RATIO = 3  # Resample ratio from 48kHz (assumed input) to 16kHz.
+    _RESAMPLE_RATIO = 3  # 从48kHz（假设输入）到16kHz的重采样比率。
 
     def __init__(
             self,
@@ -28,14 +28,14 @@ class AudioInputProcessor:
             pipeline_latency: float = 0.5,
         ) -> None:
         """
-        Initializes the AudioInputProcessor.
+        初始化音频输入处理器。
 
-        Args:
-            language: Target language code for transcription (e.g., "en").
-            is_orpheus: Flag indicating if a specific model variant should be used.
-            silence_active_callback: Optional callback function invoked when silence state changes.
-                                     It receives a boolean argument (True if silence is active).
-            pipeline_latency: Estimated latency of the processing pipeline in seconds.
+        参数:
+            language: 转录的目标语言代码（例如，"en"）。
+            is_orpheus: 指示是否应使用特定模型变体的标志。
+            silence_active_callback: 当静音状态改变时调用的可选回调函数。
+                                     它接收一个布尔参数（如果静音处于活动状态则为True）。
+            pipeline_latency: 处理管道的估计延迟（以秒为单位）。
         """
         self.last_partial_text: Optional[str] = None
         self.transcriber = TranscriptionProcessor(
@@ -59,24 +59,24 @@ class AudioInputProcessor:
         logger.info("👂🚀 AudioInputProcessor initialized.")
 
     def _silence_active_callback(self, is_active: bool) -> None:
-        """Internal callback relay for silence detection status."""
+        """内部回调中继，用于静音检测状态。"""
         if self.silence_active_callback:
             self.silence_active_callback(is_active)
 
     def _on_recording_start(self) -> None:
-        """Internal callback relay triggered when the transcriber starts recording."""
+        """当转录器开始录音时触发的内部回调中继。"""
         if self.recording_start_callback:
             self.recording_start_callback()
 
     def abort_generation(self) -> None:
-        """Signals the underlying transcriber to abort any ongoing generation process."""
+        """向底层转录器发出信号，中止任何正在进行的生成过程。"""
         logger.info("👂🛑 Aborting generation requested.")
         self.transcriber.abort_generation()
 
     def _setup_callbacks(self) -> None:
-        """Sets up internal callbacks for the TranscriptionProcessor instance."""
+        """为TranscriptionProcessor实例设置内部回调。"""
         def partial_transcript_callback(text: str) -> None:
-            """Handles partial transcription results from the transcriber."""
+            """处理来自转录器的部分转录结果。"""
             if text != self.last_partial_text:
                 self.last_partial_text = text
                 if self.realtime_callback:
@@ -86,12 +86,12 @@ class AudioInputProcessor:
 
     async def _run_transcription_loop(self) -> None:
         """
-        Continuously runs the transcription loop in a background asyncio task.
+        在后台asyncio任务中持续运行转录循环。
 
-        It repeatedly calls the underlying `transcribe_loop`. If `transcribe_loop`
-        finishes normally (completes one cycle), this loop calls it again.
-        If `transcribe_loop` raises an Exception, it's treated as a fatal error,
-        a flag is set, and this loop terminates. Handles CancelledError separately.
+        它重复调用底层的`transcribe_loop`。如果`transcribe_loop`
+        正常完成（完成一个周期），此循环将再次调用它。
+        如果`transcribe_loop`引发异常，它被视为致命错误，
+        设置标志，并且此循环终止。单独处理CancelledError。
         """
         task_name = self.transcription_task.get_name() if hasattr(self.transcription_task, 'get_name') else 'TranscriptionTask'
         logger.info(f"👂▶️ Starting background transcription task ({task_name}).")
@@ -119,17 +119,17 @@ class AudioInputProcessor:
 
     def process_audio_chunk(self, raw_bytes: bytes) -> np.ndarray:
         """
-        Converts raw audio bytes (int16) to a 16kHz 16-bit PCM numpy array.
+        将原始音频字节（int16）转换为16kHz 16位PCM numpy数组。
 
-        The audio is converted to float32 for accurate resampling and then
-        converted back to int16, clipping values outside the valid range.
+        音频被转换为float32以进行精确重采样，然后
+        转换回int16，裁剪超出有效范围的值。
 
-        Args:
-            raw_bytes: Raw audio data assumed to be in int16 format.
+        参数:
+            raw_bytes: 假定为int16格式的原始音频数据。
 
-        Returns:
-            A numpy array containing the resampled audio in int16 format at 16kHz.
-            Returns an array of zeros if the input is silent.
+        返回:
+            包含16kHz下int16格式重采样音频的numpy数组。
+            如果输入是静音，则返回零数组。
         """
         raw_audio = np.frombuffer(raw_bytes, dtype=np.int16)
 
@@ -152,22 +152,21 @@ class AudioInputProcessor:
 
     async def process_chunk_queue(self, audio_queue: asyncio.Queue) -> None:
         """
-        Continuously processes audio chunks received from an asyncio Queue.
+        持续处理从asyncio队列接收的音频块。
 
-        Retrieves audio data, processes it using `process_audio_chunk`, and
-        feeds the result to the transcriber unless interrupted or the transcription
-        task has failed. Stops when `None` is received from the queue or upon error.
+        检索音频数据，使用`process_audio_chunk`处理它，并
+        将结果提供给转录器，除非被中断或转录
+        任务失败。当从队列接收到`None`或发生错误时停止。
 
-        Args:
-            audio_queue: An asyncio queue expected to yield dictionaries containing
-                         'pcm' (raw audio bytes) or None to terminate.
+        参数:
+            audio_queue: 预期产生包含'pcm'（原始音频字节）或None以终止的字典的asyncio队列。
         """
         logger.info("👂▶️ Starting audio chunk processing loop.")
         while True:
             try:
                 # Check if the transcription task has permanently failed *before* getting item
                 if self._transcription_failed:
-                    logger.error("👂🛑 Transcription task failed previously. Stopping audio processing.")
+                    logger.error("👂�� Transcription task failed previously. Stopping audio processing.")
                     break # Stop processing if transcription backend is down
 
                 # Check if the task finished unexpectedly (e.g., cancelled but not failed)

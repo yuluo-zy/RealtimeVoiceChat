@@ -5,106 +5,100 @@ from typing import Optional
 
 class UpsampleOverlap:
     """
-    Manages chunk-wise audio upsampling with overlap handling.
+    管理带有重叠处理的音频块上采样。
 
-    This class processes sequential audio chunks, upsamples them from 24kHz to 48kHz
-    using `scipy.signal.resample_poly`, and manages overlap between chunks to
-    mitigate boundary artifacts. The processed, upsampled audio segments are
-    returned as Base64 encoded strings. It maintains internal state to handle
-    the overlap correctly across calls.
+    该类处理连续的音频块，使用 `scipy.signal.resample_poly` 将音频从24kHz上采样到48kHz，
+    并管理块之间的重叠以减轻边界伪影。处理后的上采样音频段以Base64编码字符串的形式返回。
+    它维护内部状态以正确处理调用之间的重叠。
     """
     def __init__(self):
         """
-        Initializes the UpsampleOverlap processor.
+        初始化上采样重叠处理器。
 
-        Sets up the internal state required for tracking previous audio chunks
-        and their resampled versions to handle overlaps during processing.
+        设置跟踪前一个音频块及其重采样版本所需的内部状态，
+        以便在处理过程中处理重叠。
         """
         self.previous_chunk: Optional[np.ndarray] = None
         self.resampled_previous_chunk: Optional[np.ndarray] = None
 
     def get_base64_chunk(self, chunk: bytes) -> str:
         """
-        Processes an incoming audio chunk, upsamples it, and returns the relevant segment as Base64.
+        处理输入的音频块，进行上采样，并返回相关段作为Base64编码。
 
-        Converts the raw PCM bytes (assumed 16-bit signed integer) chunk to a
-        float32 numpy array, normalizes it, and upsamples from 24kHz to 48kHz.
-        It uses the previous chunk's data to create an overlap, resamples the
-        combined audio, and extracts the central portion corresponding primarily
-        to the current chunk, using overlap to smooth transitions. The state is
-        updated for the next call. The extracted audio segment is converted back
-        to 16-bit PCM bytes and returned as a Base64 encoded string.
+        将原始PCM字节（假设为16位有符号整数）块转换为float32 numpy数组，
+        进行归一化，并从24kHz上采样到48kHz。它使用前一个块的数据创建重叠，
+        重采样组合后的音频，并提取主要对应于当前块的中心部分，
+        使用重叠来平滑过渡。更新状态以供下一次调用使用。
+        提取的音频段被转换回16位PCM字节并以Base64编码字符串的形式返回。
 
-        Args:
-            chunk: Raw audio data bytes (PCM 16-bit signed integer format expected).
+        参数:
+            chunk: 原始音频数据字节（预期为PCM 16位有符号整数格式）。
 
-        Returns:
-            A Base64 encoded string representing the upsampled audio segment
-            corresponding to the input chunk, adjusted for overlap. Returns an
-            empty string if the input chunk is empty.
+        返回:
+            表示上采样音频段的Base64编码字符串，已针对重叠进行调整。
+            如果输入块为空，则返回空字符串。
         """
         audio_int16 = np.frombuffer(chunk, dtype=np.int16)
-        # Handle potential empty chunks gracefully
+        # 优雅地处理潜在的空块
         if audio_int16.size == 0:
-             return "" # Return empty string for empty input chunk
+             return "" # 对于空输入块返回空字符串
 
         audio_float = audio_int16.astype(np.float32) / 32768.0
 
-        # Upsample the current chunk independently first, needed for state and first chunk logic
+        # 首先独立上采样当前块，用于状态和第一个块的逻辑
         upsampled_current_chunk = resample_poly(audio_float, 48000, 24000)
 
         if self.previous_chunk is None:
-            # First chunk: Output the first half of its upsampled version
+            # 第一个块：输出其上采样版本的前半部分
             half = len(upsampled_current_chunk) // 2
             part = upsampled_current_chunk[:half]
         else:
-            # Subsequent chunks: Combine previous float chunk with current float chunk
+            # 后续块：将前一个浮点块与当前浮点块组合
             combined = np.concatenate((self.previous_chunk, audio_float))
-            # Upsample the combined chunk
+            # 上采样组合后的块
             up = resample_poly(combined, 48000, 24000)
 
-            # Calculate lengths and indices for extracting the middle part
-            # Ensure self.resampled_previous_chunk is not None (shouldn't happen here due to outer if)
+            # 计算提取中间部分的长度和索引
+            # 确保self.resampled_previous_chunk不为None（由于外部if，这里不应该发生）
             assert self.resampled_previous_chunk is not None
-            prev_len = len(self.resampled_previous_chunk) # Length of the *upsampled* previous chunk
-            h_prev = prev_len // 2 # Midpoint index of the *upsampled* previous chunk
+            prev_len = len(self.resampled_previous_chunk) # 前一个块的上采样版本的长度
+            h_prev = prev_len // 2 # 前一个块的上采样版本的中点索引
 
-            # *** CORRECTED INDEX CALCULATION (Reverted to original) ***
-            # Calculate the end index for the part corresponding to the current chunk's main contribution
-            # This index represents the midpoint of the *current* chunk's contribution within the combined 'up' array.
+            # *** 修正的索引计算（恢复到原始） ***
+            # 计算对应于当前块主要贡献的部分的结束索引
+            # 这个索引表示组合'up'数组中当前块贡献的中点
             h_cur = (len(up) - prev_len) // 2 + prev_len
 
             part = up[h_prev:h_cur]
 
-        # Update state for the next iteration
+        # 更新下一次迭代的状态
         self.previous_chunk = audio_float
-        self.resampled_previous_chunk = upsampled_current_chunk # Store the upsampled *current* chunk for the *next* overlap
+        self.resampled_previous_chunk = upsampled_current_chunk # 存储当前块的上采样版本用于下一次重叠
 
-        # Convert the extracted part back to PCM16 bytes and encode
+        # 将提取的部分转换回PCM16字节并编码
         pcm = (part * 32767).astype(np.int16).tobytes()
         return base64.b64encode(pcm).decode('utf-8')
 
     def flush_base64_chunk(self) -> Optional[str]:
         """
-        Returns the final remaining segment of upsampled audio after all chunks are processed.
+        在处理完所有块后返回剩余的上采样音频段。
 
-        After the last call to `get_base64_chunk`, the state holds the upsampled
-        version of the very last input chunk (`self.resampled_previous_chunk`).
-        This method returns that *entire* final upsampled chunk, converted to
-        16-bit PCM bytes and encoded as Base64. It then clears the internal state.
-        This should be called once after all input chunks have been passed to `get_base64_chunk`.
+        在最后一次调用 `get_base64_chunk` 后，状态保存了最后一个输入块的上采样版本
+        (`self.resampled_previous_chunk`)。此方法返回该完整的上采样块，
+        转换为16位PCM字节并以Base64编码。然后清除内部状态。
+        这应该在所有输入块都已传递给 `get_base64_chunk` 后调用一次。
 
-        Returns:
-            A Base64 encoded string containing the final upsampled audio chunk,
-            or None if no chunks were processed or if flush has already been called.
+        返回:
+            包含最终上采样音频块的Base64编码字符串，
+            如果没有处理任何块或已经调用了flush，则返回None。
         """
-        # *** CORRECTED FLUSH LOGIC (Reverted to original) ***
+        # *** 修正的flush逻辑（恢复到原始） ***
         if self.resampled_previous_chunk is not None:
-            # Return the entire last upsampled chunk as per original logic
+            # 按照原始逻辑返回整个最后一个上采样块
             pcm = (self.resampled_previous_chunk * 32767).astype(np.int16).tobytes()
 
-            # Clear state after flushing
+            # 刷新后清除状态
             self.previous_chunk = None
             self.resampled_previous_chunk = None
             return base64.b64encode(pcm).decode('utf-8')
-        return None # Return None if there's nothing to flush
+        return None # 如果没有要刷新的内容，返回None
